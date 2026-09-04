@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <link rel="icon" href="data:,">
+  <meta charset="UTF-8">
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1"
+  >
+
+  <title>Experiment Logger</title>
+
+  <script src="libs/chart.umd.js"></script>
+
+  <style>
+    body {
+      max-width: 1400px;
+      margin: auto;
+      padding: 20px;
+      background: #f4f5f7;
+      color: #222;
+      font-family: Arial, sans-serif;
+    }
+
+    section {
+      margin-bottom: 20px;
+      padding: 18px;
+      border-radius: 8px;
+      background: white;
+      box-shadow: 0 1px 4px #ccc;
+    }
+
+    textarea, select {
+      width: 100%;
+      margin: 8px 0;
+      padding: 10px;
+      box-sizing: border-box;
+    }
+
+    button {
+      margin: 5px 5px 5px 0;
+      padding: 10px 16px;
+      border: 0;
+      border-radius: 5px;
+      background: #1976d2;
+      color: white;
+      cursor: pointer;
+    }
+
+    button.stop {
+      background: #d32f2f;
+    }
+
+    button:disabled {
+      opacity: 0.4;
+      cursor: default;
+    }
+
+    .error {
+      color: #d32f2f;
+    }
+
+    .chart {
+      height: 330px;
+      margin-top: 25px;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>Experiment Logger</h1>
+
+  <section>
+    <h2>Enregistrement</h2>
+
+    <textarea
+      id="note"
+      rows="3"
+      placeholder="Note de l'expérience"
+    ></textarea>
+
+    <button id="startButton" onclick="startRecording()">
+      Démarrer
+    </button>
+
+    <button
+      id="stopButton"
+      class="stop"
+      onclick="stopRecording()"
+      disabled
+    >
+      Arrêter
+    </button>
+
+    <p id="status">Chargement...</p>
+    <p id="error" class="error"></p>
+  </section>
+
+  <section>
+    <h2>Données en direct</h2>
+
+    <div class="chart">
+      <canvas id="liveSpeed"></canvas>
+    </div>
+
+    <div class="chart">
+      <canvas id="liveBar30"></canvas>
+    </div>
+
+    <div class="chart">
+      <canvas id="liveAcceleration"></canvas>
+    </div>
+
+    <div class="chart">
+      <canvas id="liveGyroscope"></canvas>
+    </div>
+
+    <div class="chart">
+      <canvas id="liveMagnetometer"></canvas>
+    </div>
+  </section>
+
+  <section>
+    <h2>Enregistrements précédents</h2>
+
+    <select id="runs">
+      <option value="">-- Choisir un enregistrement --</option>
+    </select>
+
+    <button onclick="loadRun()">Afficher</button>
+
+    <p id="runInfo"></p>
+
+    <div class="chart">
+      <canvas id="historySpeed"></canvas>
+    </div>
+
+    <div class="chart">
+      <canvas id="historyBar30"></canvas>
+    </div>
+
+    <div class="chart">
+      <canvas id="historyAcceleration"></canvas>
+    </div>
+
+    <div class="chart">
+      <canvas id="historyGyroscope"></canvas>
+    </div>
+
+    <div class="chart">
+      <canvas id="historyMagnetometer"></canvas>
+    </div>
+  </section>
+
+  <script>
+    const MAX_POINTS = 1000;
+    const RAD_TO_DEG = 180 / Math.PI;
+
+    const COLORS = {
+      x: "#e53935",
+      y: "#1e88e5",
+      z: "#43a047",
+      pressure: "#d81b60",
+      depth: "#3949ab",
+      temperature: "#fb8c00",
+      speed: "#00897b"
+    };
+
+    let recording = false;
+    let lastImuTime = null;
+    let lastBarTime = null;
+    let liveBusy = false;
+    let historyCharts = [];
+
+    function dataset(label, color, axis = "y") {
+      return {
+        label,
+        data: [],
+        borderColor: color,
+        borderWidth: 1.5,
+        pointRadius: 0,
+        yAxisID: axis
+      };
+    }
+
+    function createChart(id, datasets, unit, extraScales = null) {
+      const yScales = extraScales || {
+        y: {
+          title: {
+            display: true,
+            text: unit
+          }
+        }
+      };
+
+      return new Chart(document.getElementById(id), {
+        type: "line",
+        data: { datasets },
+
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: false,
+
+          interaction: {
+            mode: "nearest",
+            intersect: false
+          },
+
+          scales: {
+            x: {
+              type: "linear",
+              title: {
+                display: true,
+                text: "Temps (s)"
+              }
+            },
+
+            ...yScales
+          }
+        }
+      });
+    }
+
+    const barScales = {
+      pressure: {
+        position: "left",
+        title: {
+          display: true,
+          text: "Pression (mbar)"
+        }
+      },
+
+      depth: {
+        position: "right",
+        title: {
+          display: true,
+          text: "Profondeur (m)"
+        },
+        grid: {
+          drawOnChartArea: false
+        }
+      },
+
+      temperature: {
+        display: false
+      }
+    };
+
+    function xyzDatasets(prefix = "") {
+      return [
+        dataset(`${prefix}X`, COLORS.x),
+        dataset(`${prefix}Y`, COLORS.y),
+        dataset(`${prefix}Z`, COLORS.z)
+      ];
+    }
+
+    const liveBar = createChart(
+      "liveBar30",
+      [
+        dataset("Pression (mbar)", COLORS.pressure, "pressure"),
+        dataset("Profondeur (m)", COLORS.depth, "depth"),
+        dataset("Température (°C)", COLORS.temperature, "temperature")
+      ],
+      "",
+      barScales
+    );
+
+    const liveSpeed = createChart(
+      "liveSpeed",
+      [dataset("Vitesse de coulée", COLORS.speed)],
+      "Vitesse de coulée (m/s)"
+    );
+
+    const liveAcceleration = createChart(
+      "liveAcceleration",
+      xyzDatasets(),
+      "Accélération (m/s²)"
+    );
+
+    const liveGyroscope = createChart(
+      "liveGyroscope",
+      xyzDatasets(),
+      "Vitesse angulaire (deg/s)"
+    );
+
+    const liveMagnetometer = createChart(
+      "liveMagnetometer",
+      xyzDatasets(),
+      "Champ magnétique (µT)"
+    );
+
+    async function api(url, options = {}) {
+      const response = await fetch(url, options);
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.detail || "Erreur serveur");
+      }
+
+      return data;
+    }
+
+    function addPoint(chart, index, time, value) {
+      const x = Number(time);
+      const y = Number(value);
+
+      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        return;
+      }
+
+      const points = chart.data.datasets[index].data;
+      points.push({ x, y });
+
+      if (points.length > MAX_POINTS) {
+        points.shift();
+      }
+    }
+
+    async function startRecording() {
+      try {
+        clearLive();
+
+        await api("/api/start", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            note: document.getElementById("note").value
+          })
+        });
+
+        await updateStatus();
+
+      } catch (error) {
+        showError(error.message);
+      }
+    }
+
+    async function stopRecording() {
+      try {
+        await api("/api/stop", { method: "POST" });
+        await updateStatus();
+        await loadRunList();
+
+      } catch (error) {
+        showError(error.message);
+      }
+    }
+
+    async function updateStatus() {
+      try {
+        const data = await api("/api/status");
+
+        recording = data.recording;
+
+        document.getElementById("startButton").disabled = recording;
+        document.getElementById("stopButton").disabled = !recording;
+
+        document.getElementById("status").textContent = recording
+          ? `${data.run_id} — IMU : ${data.imu_samples}, ` +
+            `Bar30 : ${data.bar30_samples}`
+          : "À l'arrêt";
+
+        showError(data.error || "");
+
+      } catch (error) {
+        showError(error.message);
+      }
+    }
+
+    async function updateLive() {
+      if (!recording || liveBusy) {
+        return;
+      }
+
+      liveBusy = true;
+
+      try {
+        const data = await api("/api/live");
+
+        if (data.imu && data.imu.time !== lastImuTime) {
+          lastImuTime = data.imu.time;
+
+          ["xacc", "yacc", "zacc"].forEach((key, index) => {
+            addPoint(
+              liveAcceleration,
+              index,
+              data.imu.time,
+              data.imu[key]
+            );
+          });
+
+          ["xgyro", "ygyro", "zgyro"].forEach((key, index) => {
+            addPoint(
+              liveGyroscope,
+              index,
+              data.imu.time,
+              data.imu[key] * RAD_TO_DEG
+            );
+          });
+
+          ["xmag", "ymag", "zmag"].forEach((key, index) => {
+            addPoint(
+              liveMagnetometer,
+              index,
+              data.imu.time,
+              data.imu[key]
+            );
+          });
+
+          liveAcceleration.update("none");
+          liveGyroscope.update("none");
+          liveMagnetometer.update("none");
+        }
+
+        if (data.bar30 && data.bar30.time !== lastBarTime) {
+          lastBarTime = data.bar30.time;
+
+          addPoint(liveBar, 0, data.bar30.time, data.bar30.mbar);
+          addPoint(liveBar, 1, data.bar30.time, data.bar30.depth);
+          addPoint(liveBar, 2, data.bar30.time, data.bar30.temperature);
+
+          addPoint(
+            liveSpeed,
+            0,
+            data.bar30.time,
+            data.bar30.sink_speed
+          );
+
+          liveBar.update("none");
+          liveSpeed.update("none");
+        }
+
+      } catch (error) {
+        showError(error.message);
+
+      } finally {
+        liveBusy = false;
+      }
+    }
+
+    function clearLive() {
+      lastImuTime = null;
+      lastBarTime = null;
+
+      const charts = [
+        liveBar,
+        liveSpeed,
+        liveAcceleration,
+        liveGyroscope,
+        liveMagnetometer
+      ];
+
+      for (const chart of charts) {
+        for (const data of chart.data.datasets) {
+          data.data = [];
+        }
+
+        chart.update("none");
+      }
+    }
+
+    async function loadRunList() {
+      const data = await api("/api/runs");
+      const select = document.getElementById("runs");
+
+      select.innerHTML =
+        '<option value="">-- Choisir un enregistrement --</option>';
+
+      for (const run of data.runs) {
+        const option = document.createElement("option");
+
+        option.value = run.run_id;
+        option.textContent =
+          `${run.run_id} — ${run.note || "sans note"}`;
+
+        select.appendChild(option);
+      }
+    }
+
+    function points(values, key, factor = 1) {
+      return values
+        .map(value => ({
+          x: Number(value.time),
+          y: Number(value[key]) * factor
+        }))
+        .filter(point =>
+          Number.isFinite(point.x) &&
+          Number.isFinite(point.y)
+        );
+    }
+
+    function historyXYZ(id, values, keys, unit, factor = 1) {
+      return createChart(
+        id,
+        keys.map((key, index) => ({
+          ...dataset(["X", "Y", "Z"][index], [
+            COLORS.x,
+            COLORS.y,
+            COLORS.z
+          ][index]),
+          data: points(values, key, factor)
+        })),
+        unit
+      );
+    }
+
+    async function loadRun() {
+      const runId = document.getElementById("runs").value;
+
+      if (!runId) {
+        return;
+      }
+
+      try {
+        const data = await api(
+          `/api/runs/${encodeURIComponent(runId)}`
+        );
+
+        document.getElementById("runInfo").textContent =
+          `Note : ${data.info.note || "aucune"} — ` +
+          `IMU : ${data.info.imu_samples} — ` +
+          `Bar30 : ${data.info.bar30_samples}`;
+
+        historyCharts.forEach(chart => chart.destroy());
+
+        const barHistory = createChart(
+          "historyBar30",
+          [
+            {
+              ...dataset("Pression (mbar)", COLORS.pressure, "pressure"),
+              data: points(data.bar30, "mbar")
+            },
+            {
+              ...dataset("Profondeur (m)", COLORS.depth, "depth"),
+              data: points(data.bar30, "depth")
+            },
+            {
+              ...dataset(
+                "Température (°C)",
+                COLORS.temperature,
+                "temperature"
+              ),
+              data: points(data.bar30, "temperature")
+            }
+          ],
+          "",
+          barScales
+        );
+
+        const speedHistory = createChart(
+          "historySpeed",
+          [{
+            ...dataset("Vitesse de coulée", COLORS.speed),
+            data: points(data.bar30, "sink_speed")
+          }],
+          "Vitesse de coulée (m/s)"
+        );
+
+        const accelerationHistory = historyXYZ(
+          "historyAcceleration",
+          data.imu,
+          ["xacc", "yacc", "zacc"],
+          "Accélération (m/s²)"
+        );
+
+        const gyroscopeHistory = historyXYZ(
+          "historyGyroscope",
+          data.imu,
+          ["xgyro", "ygyro", "zgyro"],
+          "Vitesse angulaire (deg/s)"
+        );
+
+        const magnetometerHistory = historyXYZ(
+          "historyMagnetometer",
+          data.imu,
+          ["xmag", "ymag", "zmag"],
+          "Champ magnétique (µT)"
+        );
+
+        historyCharts = [
+          barHistory,
+          speedHistory,
+          accelerationHistory,
+          gyroscopeHistory,
+          magnetometerHistory
+        ];
+
+      } catch (error) {
+        showError(error.message);
+      }
+    }
+
+    function showError(message) {
+      document.getElementById("error").textContent = message;
+    }
+
+    updateStatus();
+    loadRunList();
+
+    setInterval(updateStatus, 1000);
+    setInterval(updateLive, 100);
+  </script>
+</body>
+</html>
