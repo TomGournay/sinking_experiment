@@ -200,6 +200,8 @@ async def startup():
 
     print("Capteurs prêts.")
 
+    print("Liens de l'interface : 192.168.2.2:8080")
+
 
 @app.on_event("shutdown")
 async def shutdown():
