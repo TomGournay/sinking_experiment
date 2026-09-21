@@ -96,7 +96,20 @@
       Calibrer le gyroscope - robot immobile
     </button>
 
-    <p id="calibrationStatus"></p>
+    <button id="accelMagButton" onclick="calibrationAction('accel-mag')">
+      Calibrer accéléromètre + magnétomètre
+    </button>
+    <button id="finishCalibrationButton" onclick="calibrationAction('finish')" disabled>Terminer et vérifier</button>
+    <button id="cancelCalibrationButton" onclick="calibrationAction('cancel')" disabled>Annuler la calibration</button>
+    <p id="calibrationStatus" role="status" aria-live="polite"></p>
+    <progress id="calibrationProgress" max="100" value="0" aria-label="Progression calibration" hidden></progress>
+    <p id="calibrationDetail"></p>
+    <button id="useSavedCalibrationButton" onclick="useSavedCalibration()" disabled>
+      Utiliser les dernières calibrations enregistrées
+    </button>
+    <p>Les calibrations enregistrées sont réutilisées automatiquement après redémarrage.</p>
+    <p id="savedCalibrationStatus" role="status" aria-live="polite"></p>
+    <ul id="activeCalibrations"></ul>
     <p id="status">Chargement...</p>
     <p id="error" class="error"></p>
   </section>
@@ -410,6 +423,52 @@
       }
     }
 
+    async function useSavedCalibration() {
+      const button = document.getElementById("useSavedCalibrationButton");
+      button.disabled = true;
+      try {
+        await api("/api/calibrate/use-saved", {method: "POST"});
+        document.getElementById("savedCalibrationStatus").textContent =
+          "Calibrations enregistrées chargées. Les corrections actives sont affichées ci-dessous.";
+      } catch (error) {
+        document.getElementById("savedCalibrationStatus").textContent = error.message;
+      } finally {
+        await updateStatus();
+      }
+    }
+
+    function showActiveCalibrations(saved) {
+      const list = document.getElementById("activeCalibrations");
+      list.replaceChildren();
+      for (const [key, label] of [
+        ["gyro", "Gyroscope"], ["acc", "Accéléromètre"], ["mag", "Magnétomètre"]
+      ]) {
+        const cal = saved[key];
+        const item = document.createElement("li");
+        if (!cal?.active) {
+          item.textContent = label + " : aucune calibration active.";
+        } else {
+          const date = cal.calibrated_at ? new Date(cal.calibrated_at) : null;
+          const dateText = date && Number.isFinite(date.getTime())
+            ? date.toLocaleString("fr-FR") : "date inconnue";
+          const offsets = cal.bias.map(value => Number(value).toFixed(5)).join(", ");
+          item.textContent = label + " : active — " + dateText +
+            " — biais X, Y, Z : " + offsets + " " + cal.unit +
+            (cal.matrix ? " ; échelle et alignement appliqués." : ".");
+        }
+        list.appendChild(item);
+      }
+    }
+
+    async function calibrationAction(action) {
+      try {
+        await api("/api/calibrate/" + action, {method: "POST"});
+        await updateStatus();
+      } catch (error) {
+        showError(error.message);
+      }
+    }
+
     async function updateStatus() {
       try {
         const data = await api("/api/status");
@@ -425,6 +484,28 @@
 
 	document.getElementById("calibrateButton").disabled =
 	  recording || calibrationBusy;
+
+        document.getElementById("accelMagButton").disabled = recording || calibrationBusy;
+        const saved = data.sensor_calibrations || {};
+        document.getElementById("useSavedCalibrationButton").disabled =
+          recording || calibrationBusy || !saved.saved_available;
+        showActiveCalibrations(saved);
+        const cal = data.calibration || {};
+        document.getElementById("finishCalibrationButton").disabled =
+          !data.calibrating || !cal.ready;
+        document.getElementById("cancelCalibrationButton").disabled =
+          !data.calibrating || cal.kind !== "accel-mag" || cal.phase === "solving";
+        const progress = document.getElementById("calibrationProgress");
+        progress.hidden = !cal.kind;
+        if (cal.kind) {
+          progress.value = cal.progress || 0;
+          document.getElementById("calibrationStatus").textContent =
+            (cal.progress || 0) + "% — " + cal.instruction;
+          document.getElementById("calibrationDetail").textContent =
+            (cal.detail || "") + (cal.warnings?.length ? " " + cal.warnings.join(" • ") : "");
+        } else {
+          document.getElementById("calibrationDetail").textContent = "";
+        }
 
         document.getElementById("status").textContent = recording
           ? `${data.run_id} — IMU : ${data.imu_samples}, ` +
@@ -682,7 +763,7 @@
         const magnetometerHistory = historyXYZ(
           "historyMagnetometer",
           data.imu,
-          ["xmag", "ymag", "zmag"],
+          ["xmag_robot", "ymag_robot", "zmag_robot"],
           "Champ magnétique (µT)"
         );
 

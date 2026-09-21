@@ -1,4 +1,5 @@
 data/
-
+tests/
 frontend/libs/
 __pycache__/
+.venv/

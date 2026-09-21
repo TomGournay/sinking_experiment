@@ -1,0 +1,9 @@
+python3
+python3-pip
+python3-venv
+python3-dev
+build-essential
+git
+curl
+ca-certificates
+libopenblas0-pthread

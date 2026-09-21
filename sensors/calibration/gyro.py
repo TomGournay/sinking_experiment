@@ -23,9 +23,11 @@ class GyroCalibration:
     def __init__(self, path):
         self.path = Path(path)
         self.bias = (0.0, 0.0, 0.0)
+        self.data = {}
         if self.path.exists():
             payload = json.loads(self.path.read_text(encoding="utf-8"))
             self.bias = self._vector(payload["gyro_bias_rad_s"])
+            self.data = payload
 
     @staticmethod
     def _vector(values):
@@ -88,5 +90,6 @@ class GyroCalibration:
         temporary.replace(self.path)
         # Modifier la calibration active seulement après la sauvegarde réussie.
         self.bias = bias
+        self.data = result
         return result
 

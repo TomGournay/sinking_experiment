@@ -1,0 +1,11 @@
+# Runtime dependencies for this app (Python 3.9+ on the BlueOS robot).
+# Install system packages from requirements-system.txt first; see README.md.
+fastapi>=0.100,<1
+uvicorn>=0.23,<1
+# NumPy 2.0.x supports the robot's Python 3.9; newer releases require newer Python.
+numpy>=1.24,<2.1
+smbus2>=0.4,<1
+bluerobotics-navigator>=0.1.2,<0.2
+# Official Blue Robotics Bar30 driver, pinned to a source revision.
+ms5837 @ git+https://github.com/bluerobotics/ms5837-python.git@02996d71d2f08339b3d317b3f4da0a83781c706e
+# INSLIB is the local submodule, loaded by launch.sh; build with make -B -C INSLIB pylib.

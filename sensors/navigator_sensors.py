@@ -8,6 +8,7 @@ from smbus2 import SMBus
 from pathlib import Path
 from sensors.frame_transform import rotation_matrix, rotate_vector
 from sensors.calibration.gyro import GyroCalibration
+from sensors.calibration.accel_mag import AccelMagCalibration
 
 class NavigatorSensors:
     def __init__(self):
@@ -53,6 +54,47 @@ class NavigatorSensors:
         )
 
         self.gyro_calibration = GyroCalibration(calibration_path)
+        self.accel_mag_calibration = AccelMagCalibration(
+            calibration_path.with_name('accel_mag_calibration.json'))
+
+    def calibration_summary(self):
+        gyro = self.gyro_calibration
+        combined = self.accel_mag_calibration
+        return {
+            "automatic_on_startup": True,
+            "saved_available": gyro.path.is_file() or combined.path.is_file(),
+            "gyro": {
+                "active": bool(gyro.data),
+                "calibrated_at": gyro.data.get("calibrated_at"),
+                "bias": list(gyro.bias),
+                "unit": "rad/s",
+            },
+            **{
+                key: {
+                    "active": bool(combined.data),
+                    "calibrated_at": combined.data.get("calibrated_at"),
+                    "bias": combined.data.get(key, {}).get("bias", [0, 0, 0]),
+                    "matrix": combined.data.get(key, {}).get("matrix"),
+                    "unit": unit,
+                }
+                for key, unit in (("acc", "m/s²"), ("mag", "µT"))
+            },
+        }
+
+    def use_saved_calibration(self):
+        """Validate all available files before replacing any active correction."""
+        gyro_path = self.gyro_calibration.path
+        combined_path = self.accel_mag_calibration.path
+        if not gyro_path.is_file() and not combined_path.is_file():
+            raise FileNotFoundError("Aucune calibration enregistrée disponible")
+        gyro = (GyroCalibration(gyro_path) if gyro_path.is_file()
+                else self.gyro_calibration)
+        combined = (AccelMagCalibration(combined_path) if combined_path.is_file()
+                    else self.accel_mag_calibration)
+        self.reset_filtre()
+        self.gyro_calibration = gyro
+        self.accel_mag_calibration = combined
+        return self.calibration_summary()
 
     def reset_filtre(self):
         if self.filtre is not None:
@@ -67,6 +109,13 @@ class NavigatorSensors:
             navigator.read_accel,
         )
         self.reset_filtre()
+        return result
+
+    def calibrate_accel_mag(self, report, finish, cancel):
+        def read():
+            return tuple(tuple(float(getattr(v, axis)) for axis in 'xyz')
+                         for v in (navigator.read_accel(), navigator.read_gyro(), navigator.read_mag()))
+        result = self.accel_mag_calibration.calibrate(read, report, finish, cancel)
         return result
 
     def read_imu(self):
@@ -102,7 +151,7 @@ class NavigatorSensors:
         }
 
         acc_robot = rotate_vector(
-            (accel.x, accel.y, accel.z),
+            self.accel_mag_calibration.correct('acc', (accel.x, accel.y, accel.z)),
             self.sensor_to_robot,
         )
 
@@ -116,7 +165,7 @@ class NavigatorSensors:
         )
 
         mag_robot = rotate_vector(
-            (mag.x, mag.y, mag.z),
+            self.accel_mag_calibration.correct('mag', (mag.x, mag.y, mag.z)),
             self.sensor_to_robot,
         )
 

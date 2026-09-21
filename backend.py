@@ -2,6 +2,7 @@ import asyncio
 import json
 import re
 import time
+import threading
 
 from datetime import datetime
 from pathlib import Path
@@ -55,6 +56,9 @@ last_error = ""
 
 calibrating = False
 calibration_task = None
+calibration_status = {}
+calibration_finish = threading.Event()
+calibration_cancel = threading.Event()
 
 def get_time():
     return (time.monotonic_ns() - t0) / 1e9
@@ -75,6 +79,7 @@ def write_info(state):
         "imu_samples": imu_count,
         "bar30_samples": bar30_count,
         "gyro_bias_rad_s": list(navigator.gyro_calibration.bias),
+        "accel_mag_calibration": navigator.accel_mag_calibration.data,
         "files": {
             "imu": imu_file_path.name,
             "bar30": bar30_file_path.name,
@@ -194,6 +199,8 @@ def status():
         "bar30_samples": bar30_count,
         "error": last_error,
         "calibrating": calibrating,
+        "calibration": calibration_status,
+        "sensor_calibrations": navigator.calibration_summary() if navigator else {},
     }
 
 
@@ -216,6 +223,7 @@ async def startup():
 async def shutdown():
     if recording:
         await stop_recording()
+    calibration_cancel.set()
     if calibration_task is not None:
         await asyncio.gather(
                 calibration_task,
@@ -405,11 +413,83 @@ async def calibrate_gyro():
     if calibrating:
         raise HTTPException(409, "Calibration déjà en cours")
 
+    calibration_status.clear()
     calibrating = True
     calibration_task = asyncio.create_task(run_gyro_calibration())
 
     # La calibration termine même si la requête du navigateur est annulée.
     return await asyncio.shield(calibration_task)
+
+@app.post("/api/calibrate/use-saved")
+async def use_saved_calibration():
+    if recording or tasks or calibrating:
+        raise HTTPException(409, "Arrêter l'enregistrement ou la calibration avant de charger")
+    if navigator is None:
+        raise HTTPException(503, "Navigator pas encore prête")
+    try:
+        navigator.use_saved_calibration()
+    except FileNotFoundError as error:
+        raise HTTPException(404, str(error)) from error
+    except (ValueError, KeyError, TypeError, OSError) as error:
+        raise HTTPException(400, f"Calibration non chargée : {error}") from error
+    return status()
+
+
+def report_calibration(**changes):
+    global calibration_status
+    calibration_status = {**calibration_status, **changes}
+
+
+async def run_accel_mag_calibration():
+    global calibrating
+    try:
+        result = await asyncio.to_thread(
+            navigator.calibrate_accel_mag, report_calibration,
+            calibration_finish, calibration_cancel)
+        if result is None:
+            report_calibration(phase="cancelled", ready=False,
+                               instruction="Calibration annulée. Ancienne calibration conservée.")
+        else:
+            report_calibration(phase="completed", progress=100, ready=False,
+                               instruction="Calibration accéléromètre et magnétomètre enregistrée.",
+                               warnings=result["warnings"])
+    except Exception as error:
+        report_calibration(phase="failed", ready=False,
+                           instruction=f"Calibration échouée : {error}. Ancienne calibration conservée.")
+    finally:
+        calibrating = False
+
+
+@app.post("/api/calibrate/accel-mag")
+async def start_accel_mag_calibration():
+    global calibrating, calibration_task, calibration_status
+    if recording or tasks or calibrating:
+        raise HTTPException(409, "Arrêter l'enregistrement ou la calibration en cours")
+    calibration_finish.clear()
+    calibration_cancel.clear()
+    calibration_status = {"kind": "accel-mag", "phase": "rest", "progress": 0,
+                          "ready": False, "instruction": "Poser le robot : repos initial de 20 s."}
+    calibrating = True
+    calibration_task = asyncio.create_task(run_accel_mag_calibration())
+    return status()
+
+
+@app.post("/api/calibrate/finish")
+async def finish_accel_mag_calibration():
+    if not calibrating or not calibration_status.get("ready"):
+        raise HTTPException(409, "Mouvements incomplets ou aucune session active")
+    calibration_finish.set()
+    report_calibration(ready=False, phase="solving", instruction="Vérification INSLIB en cours.")
+    return status()
+
+
+@app.post("/api/calibrate/cancel")
+async def cancel_accel_mag_calibration():
+    if not calibrating or calibration_status.get("kind") != "accel-mag":
+        raise HTTPException(409, "Aucune session accéléromètre/magnétomètre active")
+    calibration_cancel.set()
+    return status()
+
 
 # Doit rester après les routes /api
 app.mount(
