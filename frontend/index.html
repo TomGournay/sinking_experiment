@@ -92,6 +92,11 @@
       Arrêter
     </button>
 
+    <button id="calibrateButton" onclick="calibrateGyro()">
+      Calibrer le gyroscope - robot immobile
+    </button>
+
+    <p id="calibrationStatus"></p>
     <p id="status">Chargement...</p>
     <p id="error" class="error"></p>
   </section>
@@ -179,6 +184,7 @@
     let lastBarTime = null;
     let liveBusy = false;
     let historyCharts = [];
+    let calibrationPending = false;
 
     function dataset(label, color, axis = "y") {
       return {
@@ -367,14 +373,58 @@
       }
     }
 
+    async function calibrateGyro() {
+      if (recording || calibrationPending) {
+        return;
+      }
+
+      calibrationPending = true;
+
+      const message = document.getElementById("calibrationStatus");
+
+      document.getElementById("calibrateButton").disabled = true;
+      document.getElementById("startButton").disabled = true;
+
+      message.textContent =
+        "Calibration en cours pendant environ 5 secondes. " +
+        "Ne pas toucher le robot.";
+
+      try {
+        const result = await api("/api/calibrate", {
+          method: "POST"
+        });
+
+        const bias = result.gyro_bias_rad_s
+          .map(value => value.toFixed(5))
+          .join(", ");
+
+        message.textContent =
+          `Calibration enregistrée. Biais X, Y, Z : ${bias} rad/s.`;
+
+      } catch (error) {
+        message.textContent = `Calibration échouée : ${error.message}`;
+
+      } finally {
+        calibrationPending = false;
+        await updateStatus();
+      }
+    }
+
     async function updateStatus() {
       try {
         const data = await api("/api/status");
 
         recording = data.recording;
 
-        document.getElementById("startButton").disabled = recording;
-        document.getElementById("stopButton").disabled = !recording;
+	const calibrationBusy = data.calibrating || calibrationPending;
+
+	document.getElementById("startButton").disabled =
+	  recording || calibrationBusy;
+
+	document.getElementById("stopButton").disabled = !recording;
+
+	document.getElementById("calibrateButton").disabled =
+	  recording || calibrationBusy;
 
         document.getElementById("status").textContent = recording
           ? `${data.run_id} — IMU : ${data.imu_samples}, ` +

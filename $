@@ -49,10 +49,8 @@ class NavigatorSensors:
         self.precedent_ns = None
 
         calibration_path = (
-                Path(__file__).resolve().parents[1] / "gyro_calibration.json"
+        	Path(__file__).resolve().parents[1] / "gyro_calibration.json"
         )
-
-        self.gyro_calibration = GyroCalibration(calibration_path)
 
     def reset_filtre(self):
         if self.filtre is not None:
@@ -106,12 +104,8 @@ class NavigatorSensors:
             self.sensor_to_robot,
         )
 
-        gyro_corrected = self.gyro_calibration.correct(
-                (gyro.x, gyro.y, gyro.z)
-        )
-
         gyro_robot = rotate_vector(
-            gyro_corrected,
+            (gyro.x, gyro.y, gyro.z),
             self.sensor_to_robot,
         )
 
@@ -127,7 +121,7 @@ class NavigatorSensors:
             ("mag", mag_robot),
         ):
             for axis, value in zip("xyz", vector):
-                donnees[f"{axis}{sensor}_robot"] = value
+                donnees[f"{axis}{sensor}_robot"] = value        
 
         if self.precedent_ns is None:
             self.precedent_ns = instant_ns
@@ -141,7 +135,7 @@ class NavigatorSensors:
             self.reset_filtre()
             self.precedent_ns = instant_ns
             return donnees
-
+            
         self.filtre.imu(
             instant_ns // 1000,
             dt,

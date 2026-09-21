@@ -53,6 +53,8 @@ imu_count = 0
 bar30_count = 0
 last_error = ""
 
+calibrating = False
+calibration_task = None
 
 def get_time():
     return (time.monotonic_ns() - t0) / 1e9
@@ -72,6 +74,7 @@ def write_info(state):
         "duration": get_time() if t0 else 0,
         "imu_samples": imu_count,
         "bar30_samples": bar30_count,
+        "gyro_bias_rad_s": list(navigator.gyro_calibration.bias),
         "files": {
             "imu": imu_file_path.name,
             "bar30": bar30_file_path.name,
@@ -190,6 +193,7 @@ def status():
         "imu_samples": imu_count,
         "bar30_samples": bar30_count,
         "error": last_error,
+        "calibrating": calibrating,
     }
 
 
@@ -212,7 +216,11 @@ async def startup():
 async def shutdown():
     if recording:
         await stop_recording()
-
+    if calibration_task is not None:
+        await asyncio.gather(
+                calibration_task,
+                return_exceptions=True,
+        )
 
 @app.post("/api/start")
 async def start_recording(payload: dict):
@@ -224,6 +232,12 @@ async def start_recording(payload: dict):
 
     if recording:
         raise HTTPException(400, "Un enregistrement est déjà en cours")
+
+    if calibrating or tasks:
+        raise HTTPException(
+            409,
+            "Calibration ou arrêt d'enregistrement en cours",
+        )
 
     navigator.reset_filtre()
 
@@ -358,6 +372,44 @@ def get_run(run_id: str):
         "bar30": read_jsonl(bar30_path),
     }
 
+async def run_gyro_calibration():
+    global calibrating
+
+    try:
+        result = await asyncio.to_thread(navigator.calibrate_gyro)
+        return {"ok": True, **result}
+
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+
+    except Exception as error:
+        raise HTTPException(
+            500,
+            f"Échec de la calibration : {error}",
+        ) from error
+
+    finally:
+        calibrating = False
+
+
+@app.post("/api/calibrate")
+async def calibrate_gyro():
+    global calibrating, calibration_task
+
+    if recording or tasks:
+        raise HTTPException(
+            409,
+            "Arrête l'enregistrement avant de calibrer",
+        )
+
+    if calibrating:
+        raise HTTPException(409, "Calibration déjà en cours")
+
+    calibrating = True
+    calibration_task = asyncio.create_task(run_gyro_calibration())
+
+    # La calibration termine même si la requête du navigateur est annulée.
+    return await asyncio.shield(calibration_task)
 
 # Doit rester après les routes /api
 app.mount(
