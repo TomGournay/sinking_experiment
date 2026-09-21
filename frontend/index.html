@@ -108,6 +108,10 @@
     </div>
 
     <div class="chart">
+      <canvas id="liveAttitude"></canvas>
+    </div>
+
+    <div class="chart">
       <canvas id="liveAcceleration"></canvas>
     </div>
 
@@ -137,6 +141,10 @@
 
     <div class="chart">
       <canvas id="historyBar30"></canvas>
+    </div>
+
+    <div class="chart">
+      <canvas id="historyAttitude"></canvas>
     </div>
 
     <div class="chart">
@@ -270,6 +278,16 @@
       "liveSpeed",
       [dataset("Vitesse de coulée", COLORS.speed)],
       "Vitesse de coulée (m/s)"
+    );
+
+    const liveAttitude = createChart(
+      "liveAttitude",
+      [
+	dataset("Roll", COLORS.x),
+	dataset("Pitch", COLORS.y),
+	dataset("Yaw", COLORS.z)
+      ],
+      "Angle (°)"
     );
 
     const liveAcceleration = createChart(
@@ -413,6 +431,15 @@
           liveAcceleration.update("none");
           liveGyroscope.update("none");
           liveMagnetometer.update("none");
+
+	  ["roll_deg", "pitch_deg", "yaw_deg"].forEach((key, index) => {
+			    const angle = data.imu[key];
+
+			    if(data.imu.attitude_ok && Number.isFinite(angle)) {
+					      addPoint(liveAttitude, index, data.imu.time, angle);
+				      }
+		    });
+	  liveAttitude.update("none");
         }
 
         if (data.bar30 && data.bar30.time !== lastBarTime) {
@@ -448,6 +475,7 @@
       const charts = [
         liveBar,
         liveSpeed,
+	liveAttitude,
         liveAcceleration,
         liveGyroscope,
         liveMagnetometer
@@ -482,6 +510,10 @@
 
     function points(values, key, factor = 1) {
       return values
+	.filter(value =>
+			  value.time != null &&
+			  value[key] != null
+	)
         .map(value => ({
           x: Number(value.time),
           y: Number(value[key]) * factor
@@ -559,6 +591,29 @@
           "Vitesse de coulée (m/s)"
         );
 
+	const attitudeValues = data.imu.filter(
+	  value => value.attitude_ok === true
+	);
+
+	const attitudeHistory = createChart(
+	  "historyAttitude",
+	  [
+	    {
+	      ...dataset("Roll", COLORS.x),
+	      data: points(attitudeValues, "roll_deg")
+	    },
+	    {
+	      ...dataset("Pitch", COLORS.y),
+	      data: points(attitudeValues, "pitch_deg")
+	    },
+	    {
+	      ...dataset("Yaw", COLORS.z),
+	      data: points(attitudeValues, "yaw_deg")
+	    }
+	  ],
+	  "Angle (°)"
+	);
+
         const accelerationHistory = historyXYZ(
           "historyAcceleration",
           data.imu,
@@ -570,7 +625,8 @@
           "historyGyroscope",
           data.imu,
           ["xgyro", "ygyro", "zgyro"],
-          "Vitesse angulaire (deg/s)"
+          "Vitesse angulaire (deg/s)",
+	  RAD_TO_DEG
         );
 
         const magnetometerHistory = historyXYZ(
@@ -583,6 +639,7 @@
         historyCharts = [
           barHistory,
           speedHistory,
+	  attitudeHistory,
           accelerationHistory,
           gyroscopeHistory,
           magnetometerHistory

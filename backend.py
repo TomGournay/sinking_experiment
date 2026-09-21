@@ -100,15 +100,20 @@ async def record_imu():
 
                 output = {
                     "time": get_time(),
-                    "xacc": data["xacc"],
-                    "yacc": data["yacc"],
-                    "zacc": data["zacc"],
-                    "xgyro": data["xgyro"],
-                    "ygyro": data["ygyro"],
-                    "zgyro": data["zgyro"],
-                    "xmag": data["xmag"],
-                    "ymag": data["ymag"],
-                    "zmag": data["zmag"],
+#                    "xacc": data["xacc"],
+#                    "yacc": data["yacc"],
+#                    "zacc": data["zacc"],
+#                    "xgyro": data["xgyro"],
+#                    "ygyro": data["ygyro"],
+#                    "zgyro": data["zgyro"],
+#                    "xmag": data["xmag"],
+#                    "ymag": data["ymag"],
+#                    "zmag": data["zmag"],
+#                    "roll_deg" : data["roll_deg"],
+#                    "pitch_deg" : data["pitch_deg"],
+#                    "yaw_deg" : data["yaw_deg"],
+#                    "attitude_ok" : data["attitude_ok"],
+                    **data,
                 }
 
                 file.write(json.dumps(output) + "\n")
@@ -219,6 +224,8 @@ async def start_recording(payload: dict):
 
     if recording:
         raise HTTPException(400, "Un enregistrement est déjà en cours")
+
+    navigator.reset_filtre()
 
     current_note = str(payload.get("note", "")).strip()
     note_name = safe_name(current_note)
