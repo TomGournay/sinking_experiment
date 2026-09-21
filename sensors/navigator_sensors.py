@@ -1,10 +1,12 @@
 import bluerobotics_navigator as navigator
 import math
 import time
+import json
 
 from INSLIB import Navigator as FiltreAttitude, Config
 from smbus2 import SMBus
-
+from pathlib import Path
+from sensors.frame_transform import rotation_matrix, rotate_vector
 
 class NavigatorSensors:
     def __init__(self):
@@ -26,6 +28,21 @@ class NavigatorSensors:
 
         navigator.set_navigator_version(version)
         navigator.init()
+
+        config_path = (
+                Path(__file__).resolve().parents[1] / "imu_mount.json"
+                )
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+
+        self.mount_angles = tuple(
+            math.radians(float(config[key]))
+            for key in ("roll_deg", "pitch_deg", "yaw_deg")
+        )
+
+        if not all(math.isfinite(a) for a in self.mount_angles):
+            raise ValueError("Les angles de montage doivent être finis")
+
+        self.sensor_to_robot = rotation_matrix(self.mount_angles)
 
         self.filtre = None
         self.precedent_ns = None
@@ -69,6 +86,30 @@ class NavigatorSensors:
             "filter_mode":  "INITIALIZING",
         }
 
+        acc_robot = rotate_vector(
+            (accel.x, accel.y, accel.z),
+            self.sensor_to_robot,
+        )
+
+        gyro_robot = rotate_vector(
+            (gyro.x, gyro.y, gyro.z),
+            self.sensor_to_robot,
+        )
+
+        mag_robot = rotate_vector(
+            (mag.x, mag.y, mag.z),
+            self.sensor_to_robot,
+        )
+
+        # Conserver également les mesures dans le repère du robot.
+        for sensor, vector in (
+            ("acc", acc_robot),
+            ("gyro", gyro_robot),
+            ("mag", mag_robot),
+        ):
+            for axis, value in zip("xyz", vector):
+                donnees[f"{axis}{sensor}_robot"] = value        
+
         if self.precedent_ns is None:
             self.precedent_ns = instant_ns
             return donnees
@@ -85,12 +126,12 @@ class NavigatorSensors:
         self.filtre.imu(
             instant_ns // 1000,
             dt,
-            acc=(accel.x, accel.y, accel.z),
-            gyr=(gyro.x, gyro.y, gyro.z),
+            acc=acc_robot,
+            gyr=gyro_robot,
         )
 
         self.filtre.mag(
-            (mag.x, mag.y, mag.z),
+            mag_robot,
             (0.0, 0.0, 0.0),
         )
 

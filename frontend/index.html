@@ -401,7 +401,7 @@
         if (data.imu && data.imu.time !== lastImuTime) {
           lastImuTime = data.imu.time;
 
-          ["xacc", "yacc", "zacc"].forEach((key, index) => {
+          ["xacc_robot", "yacc_robot", "zacc_robot"].forEach((key, index) => {
             addPoint(
               liveAcceleration,
               index,
@@ -410,7 +410,7 @@
             );
           });
 
-          ["xgyro", "ygyro", "zgyro"].forEach((key, index) => {
+          ["xgyro_robot", "ygyro_robot", "zgyro_robot"].forEach((key, index) => {
             addPoint(
               liveGyroscope,
               index,
@@ -419,7 +419,7 @@
             );
           });
 
-          ["xmag", "ymag", "zmag"].forEach((key, index) => {
+          ["xmag_robot", "ymag_robot", "zmag_robot"].forEach((key, index) => {
             addPoint(
               liveMagnetometer,
               index,
@@ -617,14 +617,14 @@
         const accelerationHistory = historyXYZ(
           "historyAcceleration",
           data.imu,
-          ["xacc", "yacc", "zacc"],
+          ["xacc_robot", "yacc_robot", "zacc_robot"],
           "Accélération (m/s²)"
         );
 
         const gyroscopeHistory = historyXYZ(
           "historyGyroscope",
           data.imu,
-          ["xgyro", "ygyro", "zgyro"],
+          ["xgyro_robot", "ygyro_robot", "zgyro_robot"],
           "Vitesse angulaire (deg/s)",
 	  RAD_TO_DEG
         );
