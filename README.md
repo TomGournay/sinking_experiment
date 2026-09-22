@@ -69,9 +69,11 @@ l'interface INSLIB (`tools/inslib_calib_gui.py`) :
 2. Soulever, tourner, poser et tenir environ 4 secondes dans chaque nouvelle
    orientation. Couvrir des orientations variées ; minimum solveur : 12 poses,
    20 ou plus conseillées.
-3. Cliquer **Arrêter et calculer**, examiner les erreurs RMS avant/après et
-   les avertissements INSLIB, puis **Enregistrer le résultat**.
-   Annuler pendant la collecte ou abandonner le résultat conserve les valeurs actives.
+3. Cliquer **Arrêter, calculer et enregistrer**. Après calcul réussi, la dernière
+   calibration est automatiquement sauvegardée dans `accel_mag_calibration.json`
+   et activée, comme le gyroscope dans `gyro_calibration.json`.
+   Le statut affiche les erreurs RMS et les avertissements INSLIB.
+   Annuler pendant la collecte conserve les valeurs précédentes.
 
 Les pourcentages décrivent le repos initial puis l'objectif conseillé de
 20 poses. Ils ne mesurent pas la qualité et ne bloquent pas le calcul.
@@ -102,7 +104,7 @@ Le transport reste le pilote Navigator : chaque lecture IMU/magnétomètre
 reçoit son horodatage hôte ; ce ne sont pas les horodatages matériels UBX
 de l'outil INSLIB. La température du capteur n'est pas enregistrée ici.
 
-Après validation par l'utilisateur, les corrections sont sauvegardées
+Après calcul réussi, les corrections sont sauvegardées automatiquement
 atomiquement dans `accel_mag_calibration.json`, rechargées au démarrage et
 appliquées comme `M @ (raw - bias)` avant la rotation vers le repère robot.
 Les mesures brutes restent dans les journaux ; les champs `*_robot` sont

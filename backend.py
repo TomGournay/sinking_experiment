@@ -464,8 +464,10 @@ async def run_accel_mag_calibration(gravity=9.80665, field_ut=0.0, estimate_misa
             report_calibration(phase="cancelled", ready=False,
                                instruction="Calibration annulée. Ancienne calibration conservée.")
         else:
-            report_calibration(phase="review", ready=False,
-                               instruction="Résultat INSLIB prêt : vérifier les erreurs et avertissements, puis enregistrer.",
+            report_calibration(phase="completed", progress=100, progress_label="Enregistré", ready=False,
+                               instruction=("Accéléromètre et magnétomètre enregistrés automatiquement dans accel_mag_calibration.json."
+                                            if result["mag_updated"] else
+                                            "Accéléromètre enregistré automatiquement. Magnétomètre inchangé."),
                                detail=result["review_detail"], warnings=result["warnings"])
     except Exception as error:
         report_calibration(phase="failed", ready=False,
@@ -508,27 +510,8 @@ async def finish_accel_mag_calibration():
     return status()
 
 
-@app.post("/api/calibrate/save")
-async def save_accel_mag_calibration():
-    if recording or tasks or calibrating or calibration_status.get("phase") != "review":
-        raise HTTPException(409, "Aucun résultat disponible à enregistrer à l'arrêt")
-    try:
-        result = navigator.accel_mag_calibration.save_pending()
-    except (ValueError, OSError) as error:
-        raise HTTPException(400, str(error)) from error
-    report_calibration(phase="completed", progress=100, progress_label="Enregistré",
-                       instruction=("Accéléromètre et magnétomètre enregistrés."
-                                    if result["mag_updated"] else
-                                    "Accéléromètre enregistré. Magnétomètre inchangé."))
-    return status()
-
-
 @app.post("/api/calibrate/cancel")
 async def cancel_accel_mag_calibration():
-    if not calibrating and calibration_status.get("phase") == "review":
-        navigator.accel_mag_calibration.pending = None
-        report_calibration(phase="cancelled", instruction="Résultat abandonné. Ancienne calibration conservée.")
-        return status()
     if not calibrating or calibration_status.get("kind") != "accel-mag":
         raise HTTPException(409, "Aucune session accéléromètre/magnétomètre active")
     calibration_cancel.set()

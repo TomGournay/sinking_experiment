@@ -133,8 +133,7 @@
     <button id="accelMagButton" onclick="calibrationAction('accel-mag')">
       Calibrer accéléromètre + magnétomètre
     </button>
-    <button id="finishCalibrationButton" onclick="calibrationAction('finish')" disabled>Arrêter et calculer</button>
-    <button id="saveCalibrationButton" onclick="calibrationAction('save')" disabled>Enregistrer le résultat</button>
+    <button id="finishCalibrationButton" onclick="calibrationAction('finish')" disabled>Arrêter, calculer et enregistrer</button>
     <button id="cancelCalibrationButton" onclick="calibrationAction('cancel')" disabled>Annuler la calibration</button>
     <p id="calibrationStatus" role="status" aria-live="polite"></p>
     <progress id="calibrationProgress" max="100" value="0" aria-label="Progression calibration" hidden></progress>
@@ -565,17 +564,15 @@
           recording || calibrationBusy || !saved.saved_available;
         showActiveCalibrations(saved);
         const cal = data.calibration || {};
-        document.getElementById("saveCalibrationButton").disabled =
-          recording || calibrationBusy || cal.phase !== "review";
         for (const id of ["calibrationGravity", "calibrationField", "calibrationMisalignment"]) {
           document.getElementById(id).disabled = calibrationBusy;
         }
         document.getElementById("finishCalibrationButton").disabled =
           !data.calibrating || !cal.ready;
         document.getElementById("cancelCalibrationButton").disabled =
-          (!data.calibrating && cal.phase !== "review") || cal.kind !== "accel-mag" || cal.phase === "solving";
+          !data.calibrating || cal.kind !== "accel-mag" || cal.phase === "solving";
         const progress = document.getElementById("calibrationProgress");
-        progress.hidden = !cal.kind || ["review", "solving", "failed", "cancelled"].includes(cal.phase);
+        progress.hidden = !cal.kind || ["solving", "failed", "cancelled"].includes(cal.phase);
         if (cal.kind) {
           progress.value = cal.progress || 0;
           document.getElementById("calibrationStatus").textContent =

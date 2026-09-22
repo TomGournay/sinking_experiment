@@ -48,7 +48,6 @@ class AccelMagCalibration:
     def __init__(self, path):
         self.path = Path(path)
         self.data = {}
-        self.pending = None
         if self.path.exists():
             self.data = json.loads(self.path.read_text(encoding="utf-8"))
             for key in ("acc", "mag"):
@@ -70,7 +69,6 @@ class AccelMagCalibration:
 
     def calibrate(self, read, report, finish, cancel, gravity=protocol.G_MPS2,
                   field_ut=0.0, estimate_misalignment=False):
-        self.pending = None
         rec = protocol.Recording()
         start = time.monotonic()
         next_scan = 0.0
@@ -145,15 +143,12 @@ class AccelMagCalibration:
         payload["review_detail"] = detail
         if cancel.is_set():
             return None
-        self.pending = payload
-        return payload
+        return self.save(payload)
 
-    def save_pending(self):
-        if self.pending is None:
-            raise ValueError("Aucun résultat à enregistrer")
+    def save(self, payload):
+        """Persist before activating, just like the gyro calibration."""
         temporary = self.path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(self.pending, indent=2, allow_nan=False), encoding="utf-8")
+        temporary.write_text(json.dumps(payload, indent=2, allow_nan=False), encoding="utf-8")
         temporary.replace(self.path)
-        self.data = self.pending
-        self.pending = None
+        self.data = payload
         return self.data
