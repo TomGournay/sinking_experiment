@@ -2,6 +2,9 @@ import bluerobotics_navigator as navigator
 import math
 import time
 import json
+import os
+import threading
+
 
 from INSLIB import Navigator as FiltreAttitude, Config
 from smbus2 import SMBus
@@ -9,6 +12,15 @@ from pathlib import Path
 from sensors.frame_transform import rotation_matrix, rotate_vector
 from sensors.calibration.gyro import GyroCalibration
 from sensors.calibration.accel_mag import AccelMagCalibration
+
+_NAVIGATOR_LOCK = threading.Lock()
+
+
+def read_navigator(reader, *args):
+    """Serialize hardware access across monitoring, recording and calibration."""
+    with _NAVIGATOR_LOCK:
+        return reader(*args)
+
 
 class NavigatorSensors:
     def __init__(self):
@@ -56,6 +68,35 @@ class NavigatorSensors:
         self.gyro_calibration = GyroCalibration(calibration_path)
         self.accel_mag_calibration = AccelMagCalibration(
             calibration_path.with_name('accel_mag_calibration.json'))
+
+    def read_battery_voltage(self):
+        """POWER pin 4 -> ADC3; the Blue Robotics PSM divides voltage by 11."""
+        multiplier = float(os.environ.get("BATTERY_VOLTAGE_MULTIPLIER", "11.0"))
+        if not math.isfinite(multiplier) or multiplier <= 0:
+            raise ValueError("BATTERY_VOLTAGE_MULTIPLIER doit être positif et fini")
+        sense = float(read_navigator(navigator.read_adc, navigator.AdcChannel.Ch3))
+        if not math.isfinite(sense) or not 0 <= sense <= 3.3:
+            raise ValueError("Tension POWER hors plage (0–3,3 V)")
+        voltage = sense * multiplier
+        if not math.isfinite(voltage):
+            raise ValueError("Tension batterie invalide")
+        return voltage
+
+    def read_battery_current(self):
+        """POWER pin 3 -> ADC2; PSM current = (sense volts - 0.330) * 37.8788."""
+        multiplier = float(os.environ.get("BATTERY_CURRENT_MULTIPLIER", "37.8788"))
+        offset = float(os.environ.get("BATTERY_CURRENT_OFFSET", "0.330"))
+        if not math.isfinite(multiplier) or multiplier <= 0:
+            raise ValueError("BATTERY_CURRENT_MULTIPLIER doit être positif et fini")
+        if not math.isfinite(offset) or not 0 <= offset <= 3.3:
+            raise ValueError("BATTERY_CURRENT_OFFSET doit être entre 0 et 3,3 V")
+        sense = float(read_navigator(navigator.read_adc, navigator.AdcChannel.Ch2))
+        if not math.isfinite(sense) or not 0 <= sense <= 3.3:
+            raise ValueError("Signal courant POWER hors plage (0–3,3 V)")
+        current = (sense - offset) * multiplier
+        if not math.isfinite(current):
+            raise ValueError("Courant batterie invalide")
+        return current
 
     def calibration_summary(self):
         gyro = self.gyro_calibration
@@ -106,8 +147,8 @@ class NavigatorSensors:
 
     def calibrate_gyro(self):
         result = self.gyro_calibration.calibrate(
-            navigator.read_gyro,
-            navigator.read_accel,
+            lambda: read_navigator(navigator.read_gyro),
+            lambda: read_navigator(navigator.read_accel),
         )
         self.reset_filtre()
         return result
@@ -118,10 +159,10 @@ class NavigatorSensors:
             return tuple(float(getattr(v, axis)) for axis in "xyz")
 
         def read():
-            acc = vector(navigator.read_accel())
+            acc = vector(read_navigator(navigator.read_accel))
             stamp = time.monotonic_ns() // 1000
-            gyr = vector(navigator.read_gyro())
-            mag = vector(navigator.read_mag())
+            gyr = vector(read_navigator(navigator.read_gyro))
+            mag = vector(read_navigator(navigator.read_mag))
             mag_stamp = time.monotonic_ns() // 1000
             return stamp, acc, gyr, mag_stamp, mag
 
@@ -133,9 +174,9 @@ class NavigatorSensors:
         if self.filtre is None:
             self.reset_filtre()
 
-        accel = navigator.read_accel()
-        gyro = navigator.read_gyro()
-        mag = navigator.read_mag()
+        accel = read_navigator(navigator.read_accel)
+        gyro = read_navigator(navigator.read_gyro)
+        mag = read_navigator(navigator.read_mag)
 
         instant_ns = time.monotonic_ns()
 

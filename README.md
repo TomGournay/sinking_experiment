@@ -130,3 +130,37 @@ modifié par ce bouton.
 Les tests utilisent des mesures synthétiques et des capteurs simulés pour
 l'API ; NumPy et FastAPI sont nécessaires. La validation sur le robot reste
 à effectuer.
+
+## Tension et courant batterie (port POWER)
+
+La tension (V) et le courant (A) s'affichent en haut à droite, y compris à l'arrêt et pendant les
+calibrations. Le navigateur interroge `/api/battery` toutes les secondes
+(après la fin de la requête précédente). Une erreur ou un délai de connexion
+de 3 secondes remplace la valeur par « Indisponible ».
+
+Le signal de tension du connecteur POWER (broche 4) est relié à ADC3 :
+`navigator.read_adc(navigator.AdcChannel.Ch3)` renvoie la tension analogique
+en volts. Avec le Power Sense Module Blue Robotics, la tension batterie est
+cette valeur multipliée par **11,0**. Si le module est différent, régler
+`BATTERY_VOLTAGE_MULTIPLIER` dans l'environnement du backend avant son lancement.
+Pour ajuster la calibration : nouveau multiplicateur = multiplicateur actuel
+× tension au multimètre / tension affichée.
+
+Le courant est lu sur ADC2 (broche 3 du port POWER) et calculé suivant la
+documentation du Power Sense Module : **I = (V_ADC2 − 0,330) × 37,8788 A**.
+Les variables `BATTERY_CURRENT_MULTIPLIER` (A/V, défaut 37,8788) et
+`BATTERY_CURRENT_OFFSET` (V, défaut 0,330) permettent d'adapter le module ou
+sa calibration. Les valeurs signées sont conservées : un léger courant négatif
+près de zéro peut refléter le bruit ou un décalage de calibration.
+L'API renvoie `voltage` en volts et `current` en ampères.
+
+Le port est analogique : il ne permet pas d'identifier automatiquement le module
+ni de distinguer de façon fiable un câble débranché d'une tension nulle.
+L'entrée de mesure accepte 0–3,3 V, pas la tension brute de la batterie.
+La mesure est affichée en direct ; elle n'est pas ajoutée aux fichiers IMU/Bar30.
+
+Sources Blue Robotics :
+- [Branchement POWER](https://bluerobotics.com/learn/navigator-hardware-setup/)
+- [Schéma Navigator, feuille 3](https://bluerobotics.com/wp-content/uploads/2022/06/NAVIGATOR-PCB-SCHEMATIC.pdf)
+- [Power Sense Module, rapport 11 V/V](https://bluerobotics.com/store/comm-control-power/control/psm-asm-r2-rp/)
+- [Bibliothèque Navigator](https://github.com/bluerobotics/navigator-lib)

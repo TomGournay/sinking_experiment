@@ -1,5 +1,6 @@
 data/
-tests/
+tests/*
+!tests/test_battery.py
 frontend/libs/
 __pycache__/
 .venv/

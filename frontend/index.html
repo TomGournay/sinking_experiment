@@ -22,6 +22,26 @@
       font-family: Arial, sans-serif;
     }
 
+    .page-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+      margin-bottom: 20px;
+    }
+    .page-header h1 { margin: 0; }
+    .battery {
+      margin-left: auto;
+      padding: 10px 16px;
+      border-radius: 8px;
+      background: white;
+      box-shadow: 0 1px 4px #ccc;
+      text-align: right;
+    }
+    .battery span { display: block; font-size: 0.85rem; color: #555; }
+    .battery strong { font-size: 1.3rem; font-variant-numeric: tabular-nums; }
+
     section {
       margin-bottom: 20px;
       padding: 18px;
@@ -68,7 +88,15 @@
 </head>
 
 <body>
-  <h1>Experiment Logger</h1>
+  <header class="page-header">
+    <h1>Experiment Logger</h1>
+    <div class="battery" role="status" aria-live="polite">
+      <span>Batterie</span>
+      <strong id="batteryVoltage">— V</strong>
+      <span>Courant</span>
+      <strong id="batteryCurrent">— A</strong>
+    </div>
+  </header>
 
   <section>
     <h2>Enregistrement</h2>
@@ -485,6 +513,36 @@
       }
     }
 
+    async function updateBattery() {
+      const display = document.getElementById("batteryVoltage");
+      const currentDisplay = document.getElementById("batteryCurrent");
+      try {
+        const response = await fetch("/api/battery", {
+          signal: AbortSignal.timeout(3000),
+          cache: "no-store"
+        });
+        const data = await response.json();
+        if (!response.ok || !Number.isFinite(data.voltage) || !Number.isFinite(data.current)) {
+          throw new Error(data.detail || "Mesure indisponible");
+        }
+        display.textContent = data.voltage.toFixed(2) + " V";
+        display.classList.remove("error");
+        display.title = "Tension batterie mesurée";
+        currentDisplay.textContent = data.current.toFixed(2) + " A";
+        currentDisplay.classList.remove("error");
+        currentDisplay.title = "Courant batterie mesuré";
+      } catch (error) {
+        display.textContent = "Indisponible";
+        display.classList.add("error");
+        display.title = error.message;
+        currentDisplay.textContent = "Indisponible";
+        currentDisplay.classList.add("error");
+        currentDisplay.title = error.message;
+      } finally {
+        setTimeout(updateBattery, 1000);
+      }
+    }
+
     async function updateStatus() {
       try {
         const data = await api("/api/status");
@@ -807,6 +865,7 @@
       document.getElementById("error").textContent = message;
     }
 
+    updateBattery();
     updateStatus();
     loadRunList();
 

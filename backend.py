@@ -308,6 +308,19 @@ def get_status():
     return status()
 
 
+@app.get("/api/battery")
+def get_battery():
+    if navigator is None:
+        raise HTTPException(503, "Navigator pas encore prête")
+    try:
+        return {
+            "voltage": navigator.read_battery_voltage(),
+            "current": navigator.read_battery_current(),
+        }
+    except Exception as error:
+        raise HTTPException(503, f"Batterie : {error}") from error
+
+
 @app.get("/api/live")
 def get_live():
     return {
