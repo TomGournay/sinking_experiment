@@ -14,28 +14,46 @@ import inslib_imu_tk as imu_tk
 import inslib_mag_calib as mag_calib
 
 
-def coverage(vectors):
-    """Six signed dominant-axis sectors and direction spread, not elapsed time."""
-    v = np.asarray(vectors, dtype=float).reshape(-1, 3)
-    if not len(v):
-        return 0, 0.0
-    norms = np.linalg.norm(v, axis=1)
-    v = v[norms > 1e-9] / norms[norms > 1e-9, None]
-    if not len(v):
-        return 0, 0.0
-    axes = np.argmax(np.abs(v), axis=1)
-    sectors = {(int(a), bool(row[a] > 0)) for a, row in zip(axes, v)}
-    spread = float(3 * np.linalg.eigvalsh(v.T @ v / len(v))[0])
-    return len(sectors), max(0.0, spread)
+def solve_recording(rec, gravity=protocol.G_MPS2, field_ut=0.0, estimate_misalignment=False, log=None):
+    """INSLIB solve/solve_mag flow, with only the gyro fitting disabled.
+
+    Use the upstream detector, threshold sweep, calibration result wrapper,
+    quality warnings and time-based magnetic pose pairing without extra gates.
+    """
+    if len(rec) < 1000:
+        raise ValueError("only %d samples recorded, that is not a session" % len(rec))
+    t, acc, gyr = rec.arrays()
+    result = imu_tk.calibrate(
+        acc, gyr, t, g_mag=gravity,
+        init_static_sec=protocol.DEFAULT_INIT_SEC, with_gyro=False,
+        estimate_misalignment=estimate_misalignment, log=log)
+    cal = protocol.Calibration.from_result(
+        result, 0.0, 0.0, rec.rate_hz(), rec.temp_min, rec.temp_max,
+        gravity, float(t[-1]))
+    mag = None
+    warnings = list(cal.warnings)
+    try:
+        mag = protocol.solve_mag(rec, cal, field_ut=field_ut,
+                                 field_source="given" if field_ut else "", log=log)
+    except Exception as error:
+        warnings.append(f"magnetometer not calibrated: {error}")
+    if mag is not None:
+        warnings.extend(mag.warnings)
+        if mag.align is not None:
+            warnings.extend(mag.align.warnings)
+    return cal, mag, warnings
 
 
 class AccelMagCalibration:
     def __init__(self, path):
         self.path = Path(path)
         self.data = {}
+        self.pending = None
         if self.path.exists():
             self.data = json.loads(self.path.read_text(encoding="utf-8"))
             for key in ("acc", "mag"):
+                if key not in self.data:
+                    continue
                 matrix = np.asarray(self.data[key]["matrix"], dtype=float)
                 bias = np.asarray(self.data[key]["bias"], dtype=float)
                 if (matrix.shape != (3, 3) or bias.shape != (3,) or
@@ -44,104 +62,98 @@ class AccelMagCalibration:
                     raise ValueError("Calibration acc/mag invalide")
 
     def correct(self, sensor, raw):
-        if not self.data:
+        if sensor not in self.data:
             return tuple(raw)
         cal = self.data[sensor]
         return tuple(np.asarray(cal["matrix"]) @
                      (np.asarray(raw) - np.asarray(cal["bias"])))
 
-    def calibrate(self, read, report, finish, cancel):
+    def calibrate(self, read, report, finish, cancel, gravity=protocol.G_MPS2,
+                  field_ut=0.0, estimate_misalignment=False):
+        self.pending = None
         rec = protocol.Recording()
         start = time.monotonic()
         next_scan = 0.0
-        ready = False
         while not finish.is_set():
             if cancel.is_set():
                 return None
-            elapsed = time.monotonic() - start
-            if elapsed > 900:
-                raise ValueError("Session limitée à 15 minutes : recommencer")
-            acc, gyr, mag = read()
+            # Navigator timestamps each sensor read independently. These are
+            # host read times, not hardware acquisition timestamps.
+            stamp, acc, gyr, mag_stamp, mag = read()
             if not np.isfinite([acc, gyr, mag]).all():
                 raise ValueError("Mesure non finie : vérifier les capteurs")
-            stamp = time.monotonic_ns() // 1000
             rec.t_us.append(stamp)
             rec.acc.append(acc)
             rec.gyr.append(gyr)
-            rec.mag_t_us.append(stamp)
+            rec.mag_t_us.append(mag_stamp)
             rec.mag.append(mag)
+            elapsed = time.monotonic() - start
             if elapsed >= next_scan:
                 next_scan = elapsed + 1
-                if elapsed < 20:
-                    report(phase="rest", progress=0, ready=False,
-                           instruction=f"Poser le robot, ne pas le toucher : repos initial {elapsed:.0f}/20 s.",
-                           rest_progress=min(100, int(100 * elapsed / 20)))
+                if elapsed < protocol.DEFAULT_INIT_SEC:
+                    report(phase="rest", progress=int(100 * elapsed / protocol.DEFAULT_INIT_SEC),
+                           progress_label="Repos initial", ready=len(rec) >= 1000,
+                           instruction=f"Ne pas toucher le robot : repos initial {elapsed:.0f}/20 s.")
                 else:
-                    intervals, a = rec.static_poses(20, 4)
-                    means = [a[s:e+1].mean(axis=0) for s, e in intervals]
-                    sectors, spread = coverage(means)
+                    intervals, _ = rec.static_poses(
+                        protocol.DEFAULT_INIT_SEC, protocol.DEFAULT_POSE_SEC)
                     n = len(intervals)
-                    mag_spread = 0.0
-                    try:
-                        cloud = np.asarray(rec.mag)
-                        fit = mag_calib.ellipsoid_fit(cloud[::max(1, len(cloud) // 1500)])
-                        if fit.residual_unit <= 0.05:
-                            mag_spread = fit.spread
-                    except (ValueError, np.linalg.LinAlgError):
-                        pass  # More directions are needed before a meaningful fit.
-                    fraction = min(n / 20, sectors / 6, spread / 0.25,
-                                   mag_spread / 0.25, 1)
-                    ready = n >= 20 and sectors == 6 and spread >= 0.25 and mag_spread >= 0.25
-                    report(phase="collecting", progress=int(95 * fraction),
-                           poses=n, target_poses=20, sectors=sectors,
-                           mag_progress=min(100, int(100 * mag_spread / 0.25)),
-                           spread=round(spread, 3), ready=ready,
-                           instruction=("Positions couvertes. Terminer pour vérifier et enregistrer."
-                                        if ready else
-                                        "Tourner lentement le robot autour des trois axes, puis le poser "
-                                        "dans une nouvelle orientation et rester immobile environ 4 s. "
-                                        "Varier dessus, dessous, côtés et orientations obliques."),
-                           detail=f"{n}/20 poses détectées (indicatif), {sectors}/6 secteurs. "
-                                  f"Couverture magnétique : {min(100, int(100 * mag_spread / 0.25))} % du seuil requis. "
-                                  "Le calcul final confirme la qualité.")
+                    report(phase="collecting", progress=min(100, int(100 * n / 20)),
+                           progress_label="Objectif conseillé de 20 poses (indicatif)",
+                           poses=n, target_poses=20, ready=len(rec) >= 1000,
+                           instruction="Soulever le robot, le tourner vers une nouvelle orientation, "
+                                       "le poser et rester immobile environ 4 s. "
+                                       "Varier les orientations dans toutes les directions.",
+                           detail=f"{n} poses détectées ; minimum INSLIB : {protocol.MIN_POSITIONS}, "
+                                  "20 ou plus conseillées. Le pourcentage ne mesure pas la qualité. "
+                                  "Arrêter et calculer lorsque les orientations sont bien variées.")
             time.sleep(0.01)
         if cancel.is_set():
             return None
-        if not ready:
-            raise ValueError("Mouvements incomplets : poursuivre les poses")
-        report(phase="solving", progress=95, ready=False,
-               instruction="Mouvements terminés. Vérification INSLIB en cours, patienter.")
-        t, acc, gyr = rec.arrays()
-        result = imu_tk.calibrate(acc, gyr, t, init_static_sec=20, with_gyro=False)
-        directions = [acc[s:e+1].mean(axis=0) for s, e in result.intervals]
-        sectors, spread = coverage(directions)
-        if (result.n_positions < 20 or sectors < 6 or spread < 0.25 or
-                result.init_static_frac < 0.9 or result.residual_rms > 0.05):
-            raise ValueError("Qualité accéléromètre insuffisante : refaire le repos initial "
-                             "puis au moins 20 poses immobiles bien réparties")
-        corrected = imu_tk.apply_calib(acc, result.acc_matrix, result.acc_bias)
-        pairs = [(corrected[s:e+1].mean(axis=0),
-                  np.asarray(rec.mag[s:e+1]).mean(axis=0)) for s, e in result.intervals]
-        mag = mag_calib.solve(rec.mag, pairs)
-        if (mag.spread < 0.25 or mag.align is None or
-                mag.residual_rms_ut > 0.05 * mag.field_ut or
-                mag.align.observability < 0.15 or mag.align.scatter_after_deg > 3):
-            raise ValueError("Qualité magnétique insuffisante : tourner autour des trois axes "
-                             "loin des objets métalliques mobiles, puis recommencer")
+        report(phase="solving", ready=False,
+               instruction="Calcul INSLIB en cours. Patienter.")
+        cal, mag, warnings = solve_recording(rec, gravity, field_ut, estimate_misalignment)
+        timestamp = datetime.now(timezone.utc).isoformat()
         payload = {
-            "acc": {"matrix": result.acc_matrix.tolist(), "bias": result.acc_bias.tolist()},
-            "mag": {"matrix": mag.matrix, "bias": mag.bias},
+            **self.data,
+            "acc": {"matrix": cal.acc_matrix, "bias": cal.acc_bias,
+                    "calibrated_at": timestamp},
             "frame": "navigator_raw", "matrix_layout": "row_major",
-            "calibrated_at": datetime.now(timezone.utc).isoformat(),
-            "positions": result.n_positions, "acc_residual_m_s2": result.residual_rms,
-            "mag_residual_ut": mag.residual_rms_ut, "mag_spread": mag.spread,
-            "gravity_m_s2": 9.80665, "field_ut": mag.field_ut,
-            "field_source": mag.field_source, "warnings": mag.warnings + mag.align.warnings,
+            "calibrated_at": timestamp, "positions": cal.n_positions,
+            "acc_residual_m_s2": cal.residual_rms,
+            "gravity_m_s2": gravity, "warnings": warnings,
+            "estimate_misalignment": estimate_misalignment,
+            "mag_updated": mag is not None,
+            "acc_stats": cal.acc_stats,
         }
+        if mag is not None:
+            payload.update(
+                mag={"matrix": mag.matrix, "bias": mag.bias, "calibrated_at": timestamp},
+                mag_residual_ut=mag.residual_rms_ut, mag_spread=mag.spread,
+                field_ut=mag.field_ut, field_source=mag.field_source)
+        elif "mag" in payload:
+            # Preserve both the previous magnetic correction and its date.
+            payload["mag"] = dict(payload["mag"])
+            payload["mag"].setdefault("calibrated_at", self.data.get("calibrated_at"))
+        detail = (f"{cal.n_positions} poses. Erreur accéléromètre RMS : "
+                  f"{cal.acc_stats['raw']['rms']:.5f} → {cal.residual_rms:.5f} m/s².")
+        if mag is not None:
+            detail += (f" Erreur magnétique RMS : {mag.raw_rms_ut:.3f} → "
+                       f"{mag.residual_rms_ut:.3f} µT. Dispersion : {mag.spread:.3f}.")
+        else:
+            detail += " Magnétomètre non recalibré ; correction précédente conservée si disponible."
+        payload["review_detail"] = detail
         if cancel.is_set():
             return None
-        temporary = self.path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(payload, indent=2, allow_nan=False), encoding="utf-8")
-        temporary.replace(self.path)
-        self.data = payload
+        self.pending = payload
         return payload
+
+    def save_pending(self):
+        if self.pending is None:
+            raise ValueError("Aucun résultat à enregistrer")
+        temporary = self.path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(self.pending, indent=2, allow_nan=False), encoding="utf-8")
+        temporary.replace(self.path)
+        self.data = self.pending
+        self.pending = None
+        return self.data

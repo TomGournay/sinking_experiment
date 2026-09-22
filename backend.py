@@ -3,6 +3,7 @@ import json
 import re
 import time
 import threading
+import math
 
 from datetime import datetime
 from pathlib import Path
@@ -440,19 +441,19 @@ def report_calibration(**changes):
     calibration_status = {**calibration_status, **changes}
 
 
-async def run_accel_mag_calibration():
+async def run_accel_mag_calibration(gravity=9.80665, field_ut=0.0, estimate_misalignment=False):
     global calibrating
     try:
         result = await asyncio.to_thread(
             navigator.calibrate_accel_mag, report_calibration,
-            calibration_finish, calibration_cancel)
+            calibration_finish, calibration_cancel, gravity, field_ut, estimate_misalignment)
         if result is None:
             report_calibration(phase="cancelled", ready=False,
                                instruction="Calibration annulée. Ancienne calibration conservée.")
         else:
-            report_calibration(phase="completed", progress=100, ready=False,
-                               instruction="Calibration accéléromètre et magnétomètre enregistrée.",
-                               warnings=result["warnings"])
+            report_calibration(phase="review", ready=False,
+                               instruction="Résultat INSLIB prêt : vérifier les erreurs et avertissements, puis enregistrer.",
+                               detail=result["review_detail"], warnings=result["warnings"])
     except Exception as error:
         report_calibration(phase="failed", ready=False,
                            instruction=f"Calibration échouée : {error}. Ancienne calibration conservée.")
@@ -461,16 +462,27 @@ async def run_accel_mag_calibration():
 
 
 @app.post("/api/calibrate/accel-mag")
-async def start_accel_mag_calibration():
+async def start_accel_mag_calibration(payload: dict = None):
     global calibrating, calibration_task, calibration_status
     if recording or tasks or calibrating:
         raise HTTPException(409, "Arrêter l'enregistrement ou la calibration en cours")
+    payload = payload or {}
+    try:
+        gravity = float(payload.get("gravity", 9.80665))
+        field_ut = float(payload.get("field_ut", 0.0))
+        estimate_misalignment = payload.get("estimate_misalignment", False)
+        if not isinstance(estimate_misalignment, bool):
+            raise ValueError("Option de désalignement invalide")
+        if not math.isfinite(gravity) or not 9.7 <= gravity <= 9.9 or not math.isfinite(field_ut) or not 0 <= field_ut <= 100:
+            raise ValueError("Références invalides")
+    except (ValueError, TypeError) as error:
+        raise HTTPException(400, "Gravité entre 9,7 et 9,9, champ entre 0 et 100 µT et option de désalignement booléenne requis") from error
     calibration_finish.clear()
     calibration_cancel.clear()
     calibration_status = {"kind": "accel-mag", "phase": "rest", "progress": 0,
                           "ready": False, "instruction": "Poser le robot : repos initial de 20 s."}
     calibrating = True
-    calibration_task = asyncio.create_task(run_accel_mag_calibration())
+    calibration_task = asyncio.create_task(run_accel_mag_calibration(gravity, field_ut, estimate_misalignment))
     return status()
 
 
@@ -483,8 +495,27 @@ async def finish_accel_mag_calibration():
     return status()
 
 
+@app.post("/api/calibrate/save")
+async def save_accel_mag_calibration():
+    if recording or tasks or calibrating or calibration_status.get("phase") != "review":
+        raise HTTPException(409, "Aucun résultat disponible à enregistrer à l'arrêt")
+    try:
+        result = navigator.accel_mag_calibration.save_pending()
+    except (ValueError, OSError) as error:
+        raise HTTPException(400, str(error)) from error
+    report_calibration(phase="completed", progress=100, progress_label="Enregistré",
+                       instruction=("Accéléromètre et magnétomètre enregistrés."
+                                    if result["mag_updated"] else
+                                    "Accéléromètre enregistré. Magnétomètre inchangé."))
+    return status()
+
+
 @app.post("/api/calibrate/cancel")
 async def cancel_accel_mag_calibration():
+    if not calibrating and calibration_status.get("phase") == "review":
+        navigator.accel_mag_calibration.pending = None
+        report_calibration(phase="cancelled", instruction="Résultat abandonné. Ancienne calibration conservée.")
+        return status()
     if not calibrating or calibration_status.get("kind") != "accel-mag":
         raise HTTPException(409, "Aucune session accéléromètre/magnétomètre active")
     calibration_cancel.set()

@@ -63,51 +63,50 @@ complet de toutes les dépendances.
 
 Le bouton existant calibre uniquement le biais du gyroscope (robot immobile).
 
-Le bouton **Calibrer accéléromètre + magnétomètre** lance une session commune
-suivant le protocole actuel de `INSLIB/tools/inslib_imu_calib.py` :
-1. Poser le robot et ne pas le toucher pendant 20 secondes.
-2. Le tourner lentement autour des trois axes, le poser dans une nouvelle
-   orientation et rester immobile environ 4 secondes. Répéter avec au moins
-   20 poses variées : dessus, dessous, côtés et positions obliques.
-   Les orientations exactes ne sont pas imposées.
-3. Suivre le statut : nombre de poses détectées, secteurs couverts et
-   couverture magnétique. Puis cliquer **Terminer et vérifier**.
-   **Annuler la calibration** conserve les valeurs précédentes.
+Le bouton **Calibrer accéléromètre + magnétomètre** suit la procédure de
+l'interface INSLIB (`tools/inslib_calib_gui.py`) :
+1. Ne pas toucher le robot pendant les 20 premières secondes.
+2. Soulever, tourner, poser et tenir environ 4 secondes dans chaque nouvelle
+   orientation. Couvrir des orientations variées ; minimum solveur : 12 poses,
+   20 ou plus conseillées.
+3. Cliquer **Arrêter et calculer**, examiner les erreurs RMS avant/après et
+   les avertissements INSLIB, puis **Enregistrer le résultat**.
+   Annuler pendant la collecte ou abandonner le résultat conserve les valeurs actives.
 
-Le pourcentage global est une estimation des mouvements collectés : le minimum
-du nombre de poses / 20, des secteurs couverts / 6, de la dispersion des
-directions / 0,25 et de la dispersion magnétique / 0,25, plafonné à 95 %.
-Le repos initial a son propre décompte. Les secteurs correspondent aux axes
-signés de la Navigator ; ils servent à vérifier la couverture, sans imposer
-un placement précis. Le compteur INSLIB en direct est indicatif : le solveur
-réévalue les intervalles immobiles. 100 % signifie que les deux calibrations
-ont été validées et enregistrées, pas simplement que du temps s'est écoulé.
+Les pourcentages décrivent le repos initial puis l'objectif conseillé de
+20 poses. Ils ne mesurent pas la qualité et ne bloquent pas le calcul.
+Le compteur utilise directement `Recording.static_poses` ; le solveur
+réévalue les intervalles avec son balayage de seuils. Les anciennes conditions
+personnalisées (six secteurs, dispersion minimale, seuils RMS bloquants et
+limite de 15 minutes) ont été supprimées. Les avertissements restent des
+avertissements, comme dans INSLIB.
 
-La session utilise les solveurs INSLIB (accéléromètre : biais, échelle,
-non-orthogonalité ; magnétomètre : fer dur, fer doux et alignement sur l'IMU).
-Elle ne remplace pas la calibration gyro existante.
-Les contrôles de qualité de l'application exigent au moins 20 poses, une
-dispersion suffisante, un repos initial propre, une erreur accéléromètre
-RMS <= 0,05 m/s², une erreur de norme magnétique <= 5 %, et un alignement
-magnétique observable avec dispersion de l'inclinaison <= 3 degrés.
-Une session est limitée à 15 minutes ; un échec demande de recommencer.
+L'accéléromètre utilise `inslib_imu_tk.calibrate` avec `with_gyro=False`,
+puis le résultat et les avertissements sont construits par INSLIB.
+Comme dans son interface, l'estimation du désalignement est désactivée par
+défaut (biais et échelles uniquement) et peut être activée dans les options.
+Le magnétomètre utilise directement `inslib_imu_calib.solve_mag`, y compris
+l'appariement temporel des poses et l'alignement magnétique sur l'accéléromètre.
+La calibration gyro existante n'est ni recalculée ni modifiée.
 
-Les corrections sont enregistrées atomiquement dans
-`accel_mag_calibration.json`, rechargées au démarrage et appliquées sous la
-forme `M @ (raw - bias)` avant la rotation vers le repère robot.
+Une erreur du solveur magnétique n'annule pas un résultat accéléromètre réussi.
+La sauvegarde conserve alors l'ancienne correction magnétique et sa date,
+ou n'applique aucune correction magnétique s'il n'en existait pas.
+Les deux capteurs sont signalés séparément dans le statut.
+
+Les références configurables sont celles d'INSLIB : gravité par défaut
+9,80665 m/s² et champ magnétique 0 pour conserver l'échelle moyenne mesurée.
+Une référence locale connue peut être saisie ; la position/WMM automatique
+de l'outil INSLIB n'est pas connectée à cette application.
+Le transport reste le pilote Navigator : chaque lecture IMU/magnétomètre
+reçoit son horodatage hôte ; ce ne sont pas les horodatages matériels UBX
+de l'outil INSLIB. La température du capteur n'est pas enregistrée ici.
+
+Après validation par l'utilisateur, les corrections sont sauvegardées
+atomiquement dans `accel_mag_calibration.json`, rechargées au démarrage et
+appliquées comme `M @ (raw - bias)` avant la rotation vers le repère robot.
 Les mesures brutes restent dans les journaux ; les champs `*_robot` sont
-corrigés. Les métadonnées de chaque enregistrement incluent la calibration.
-L'enregistrement et les calibrations sont mutuellement exclusifs.
-
-Aucune position géographique n'est configurée : la gravité de référence est
-9,80665 m/s² et INSLIB conserve l'échelle magnétique moyenne mesurée
-(`field_source: measured, no reference`), sans référence WMM locale.
-Calibrer dans un champ stable, avec le robot assemblé et loin des objets
-métalliques mobiles. Les pourcentages de couverture ne constituent pas une
-mesure d'exactitude absolue.
-
-Dépendance Python supplémentaire : NumPy (les solveurs viennent du sous-module
-INSLIB présent dans ce dépôt). Lancer normalement avec `./launch.sh`.
+corrigés. Les métadonnées des enregistrements incluent la calibration active.
 
 ## Réutiliser après redémarrage
 

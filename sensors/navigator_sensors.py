@@ -71,8 +71,9 @@ class NavigatorSensors:
             },
             **{
                 key: {
-                    "active": bool(combined.data),
-                    "calibrated_at": combined.data.get("calibrated_at"),
+                    "active": key in combined.data,
+                    "calibrated_at": combined.data.get(key, {}).get(
+                        "calibrated_at", combined.data.get("calibrated_at")),
                     "bias": combined.data.get(key, {}).get("bias", [0, 0, 0]),
                     "matrix": combined.data.get(key, {}).get("matrix"),
                     "unit": unit,
@@ -111,12 +112,21 @@ class NavigatorSensors:
         self.reset_filtre()
         return result
 
-    def calibrate_accel_mag(self, report, finish, cancel):
+    def calibrate_accel_mag(self, report, finish, cancel, gravity=9.80665, field_ut=0.0,
+                            estimate_misalignment=False):
+        def vector(v):
+            return tuple(float(getattr(v, axis)) for axis in "xyz")
+
         def read():
-            return tuple(tuple(float(getattr(v, axis)) for axis in 'xyz')
-                         for v in (navigator.read_accel(), navigator.read_gyro(), navigator.read_mag()))
-        result = self.accel_mag_calibration.calibrate(read, report, finish, cancel)
-        return result
+            acc = vector(navigator.read_accel())
+            stamp = time.monotonic_ns() // 1000
+            gyr = vector(navigator.read_gyro())
+            mag = vector(navigator.read_mag())
+            mag_stamp = time.monotonic_ns() // 1000
+            return stamp, acc, gyr, mag_stamp, mag
+
+        return self.accel_mag_calibration.calibrate(
+            read, report, finish, cancel, gravity, field_ut, estimate_misalignment)
 
     def read_imu(self):
 
