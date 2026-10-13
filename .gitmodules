@@ -1,3 +1,3 @@
 [submodule "INSLIB"]
 	path = INSLIB
-	url = https://github.com/jnz/INSLIB.git
+	url = git@github.com:TomGournay/INSLIB.git
