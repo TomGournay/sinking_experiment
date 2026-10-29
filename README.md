@@ -2,6 +2,17 @@
 
 ## Installation sur le robot (BlueOS / Raspberry Pi)
 
+Le graphique « Écart de +X à la verticale descendante » utilise le quaternion
+natif du filtre : 0° signifie nez vers le bas, 90° signifie axe +X horizontal.
+Les nouveaux JSONL enregistrent `quaternion_wxyz` (robot vers NED) et
+`inclinaison_verticale_deg`, également affichée à la relecture. Les anciens
+fichiers sans ce champ n'ont pas de courbe d'inclinaison. Les angles d'Euler
+restent affichés mais sont ambigus près d'un tangage de ±90°.
+
+Après cette mise à jour, recompiler INSLIB sur le robot avec
+`make -B -C INSLIB pylib` avant de relancer l'application : l'accès au quaternion
+natif de l'AHRS a été ajouté à la liaison Python/C.
+
 Python 3.9 ou plus récent. Exécuter depuis le dossier du projet sur le robot :
 
 ```bash
@@ -166,3 +177,27 @@ Sources Blue Robotics :
 - [Schéma Navigator, feuille 3](https://bluerobotics.com/wp-content/uploads/2022/06/NAVIGATOR-PCB-SCHEMATIC.pdf)
 - [Power Sense Module, rapport 11 V/V](https://bluerobotics.com/store/comm-control-power/control/psm-asm-r2-rp/)
 - [Bibliothèque Navigator](https://github.com/bluerobotics/navigator-lib)
+
+## Protection contre les plantages Navigator / AK09915
+
+Le pilote natif Navigator est initialisé et utilisé dans un processus séparé
+(unique pour les lectures IMU, calibration et batterie). Une panique Rust telle
+que `AK09915: I2C(Nix(EREMOTEIO))` peut encore arrêter ce processus, mais ne
+termine plus le backend ni l'enregistrement Bar30. Les détails Rust restent
+visibles dans le terminal.
+
+Lors d'un échec, aucune mesure IMU fictive n'est enregistrée ; la dernière
+mesure IMU affichée est effacée et `last_error` signale l'interruption.
+Le filtre d'attitude est réinitialisé. Le prochain appel après un délai minimum
+de 2 secondes relance le pilote et tente de reprendre les mesures. Un appel
+bloqué est interrompu après 2 secondes (10 secondes pour l'initialisation).
+Une calibration en cours échoue explicitement si une lecture échoue : elle
+n'est pas poursuivie avec des valeurs manquantes. Une panne à l'initialisation
+initiale reste une erreur de démarrage explicite.
+
+Cette protection ne répare pas la liaison I2C : vérifier alimentation,
+connectique et absence d'autre programme accédant à la Navigator si les
+interruptions persistent. Le SITL seul n'implique pas un conflit matériel.
+Après copie des fichiers modifiés sur le robot, redémarrer `./launch.sh`.
+Les tests de protection simulent un véritable `SIGABRT` et une lecture bloquée,
+sans matériel et sans production de core dump.

@@ -163,6 +163,11 @@
       <canvas id="liveAttitude"></canvas>
     </div>
 
+    <p>Roll / Pitch / Yaw : angles d’Euler ambigus près de la verticale. Pour la chute, utiliser l’écart ci-dessous.</p>
+    <div class="chart">
+      <canvas id="liveInclination"></canvas>
+    </div>
+
     <div class="chart">
       <canvas id="liveAcceleration"></canvas>
     </div>
@@ -197,6 +202,10 @@
 
     <div class="chart">
       <canvas id="historyAttitude"></canvas>
+    </div>
+
+    <div class="chart">
+      <canvas id="historyInclination"></canvas>
     </div>
 
     <div class="chart">
@@ -341,6 +350,12 @@
 	dataset("Yaw", COLORS.z)
       ],
       "Angle (°)"
+    );
+
+    const liveInclination = createChart(
+      "liveInclination",
+      [dataset("Écart de +X à la verticale descendante", COLORS.x)],
+      "Inclinaison (°) — 0° : nez vers le bas"
     );
 
     const liveAcceleration = createChart(
@@ -648,6 +663,10 @@
 				      }
 		    });
 	  liveAttitude.update("none");
+          if (Number.isFinite(data.imu.inclinaison_verticale_deg)) {
+            addPoint(liveInclination, 0, data.imu.time, data.imu.inclinaison_verticale_deg);
+          }
+          liveInclination.update("none");
         }
 
         if (data.bar30 && data.bar30.time !== lastBarTime) {
@@ -683,6 +702,7 @@
       const charts = [
         liveBar,
         liveSpeed,
+        liveInclination,
 	liveAttitude,
         liveAcceleration,
         liveGyroscope,
@@ -822,6 +842,15 @@
 	  "Angle (°)"
 	);
 
+        const inclinationHistory = createChart(
+          "historyInclination",
+          [{
+            ...dataset("Écart de +X à la verticale descendante", COLORS.x),
+            data: points(data.imu, "inclinaison_verticale_deg")
+          }],
+          "Inclinaison (°) — 0° : nez vers le bas"
+        );
+
         const accelerationHistory = historyXYZ(
           "historyAcceleration",
           data.imu,
@@ -847,6 +876,7 @@
         historyCharts = [
           barHistory,
           speedHistory,
+          inclinationHistory,
 	  attitudeHistory,
           accelerationHistory,
           gyroscopeHistory,

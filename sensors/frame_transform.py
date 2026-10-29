@@ -1,6 +1,14 @@
 import math
 
 
+def inclinaison_verticale(q):
+    """Écart en degrés entre +X robot et le bas, quaternion robot -> NED (wxyz)."""
+    w, x, y, z = q
+    norme2 = sum(value * value for value in q)
+    cos_angle = 2 * (x * z - w * y) / norme2
+    return math.degrees(math.acos(max(-1.0, min(1.0, cos_angle))))
+
+
 def rotation_matrix(angles):
     """Rotation capteur -> robot : Rz(yaw) @ Ry(pitch) @ Rx(roll)."""
     roll, pitch, yaw = angles  # radians

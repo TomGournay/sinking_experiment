@@ -130,6 +130,7 @@ async def record_imu():
                 imu_count += 1
 
             except Exception as error:
+                latest_imu = None
                 last_error = f"Navigator : {error}"
                 await asyncio.sleep(0.2)
 
@@ -230,6 +231,9 @@ async def shutdown():
                 calibration_task,
                 return_exceptions=True,
         )
+
+    if navigator is not None:
+        await asyncio.to_thread(navigator.close)
 
 @app.post("/api/start")
 async def start_recording(payload: dict):

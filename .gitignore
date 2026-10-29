@@ -1,6 +1,7 @@
 data/
 tests/*
 !tests/test_battery.py
+!tests/test_navigator_process.py
 frontend/libs/
 __pycache__/
 .venv/

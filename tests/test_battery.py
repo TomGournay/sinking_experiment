@@ -34,6 +34,16 @@ class BatteryTests(unittest.TestCase):
         self.driver.AdcChannel = types.SimpleNamespace(Ch3=3, Ch2=2)
         self.driver.read_adc = Mock(return_value=1.5)
 
+    def test_imu_failure_resets_filter_and_returns_no_sample(self):
+        self.sensor.filtre = Mock()
+        self.sensor.reset_filtre = Mock()
+        self.driver.read_accel = Mock(return_value=types.SimpleNamespace(x=1, y=2, z=3))
+        self.driver.read_gyro = Mock(return_value=types.SimpleNamespace(x=0, y=0, z=0))
+        self.driver.read_mag = Mock(side_effect=OSError("native driver aborted"))
+        with self.assertRaisesRegex(OSError, "native driver aborted"):
+            self.sensor.read_imu()
+        self.sensor.reset_filtre.assert_called_once()
+
     def test_power_channel_and_psm_conversion(self):
         with patch.dict(os.environ, {}, clear=True):
             self.assertEqual(self.sensor.read_battery_voltage(), 16.5)

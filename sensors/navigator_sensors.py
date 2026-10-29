@@ -1,4 +1,5 @@
-import bluerobotics_navigator as navigator
+from sensors.navigator_process import NavigatorProcess
+
 import math
 import time
 import json
@@ -7,12 +8,12 @@ import threading
 
 
 from INSLIB import Navigator as FiltreAttitude, Config
-from smbus2 import SMBus
 from pathlib import Path
-from sensors.frame_transform import rotation_matrix, rotate_vector
+from sensors.frame_transform import rotation_matrix, rotate_vector, inclinaison_verticale
 from sensors.calibration.gyro import GyroCalibration
 from sensors.calibration.accel_mag import AccelMagCalibration
 
+navigator = NavigatorProcess()
 _NAVIGATOR_LOCK = threading.Lock()
 
 
@@ -24,23 +25,6 @@ def read_navigator(reader, *args):
 
 class NavigatorSensors:
     def __init__(self):
-        with SMBus(1) as bus:
-            bmp390_id = bus.read_byte_data(0x76, 0x00)
-            bmp280_id = bus.read_byte_data(0x76, 0xD0)
-
-        if bmp390_id == 0x60:
-            version = navigator.NavigatorVersion.Version2
-            print("Navigator V2 détectée — BMP390")
-        elif bmp280_id == 0x58:
-            version = navigator.NavigatorVersion.Version1
-            print("Navigator V1 détectée — BMP280")
-        else:
-            raise RuntimeError(
-                "Baromètre Navigator non reconnu : "
-                f"0x00={bmp390_id:#04x}, 0xD0={bmp280_id:#04x}"
-            )
-
-        navigator.set_navigator_version(version)
         navigator.init()
 
         config_path = (
@@ -68,6 +52,12 @@ class NavigatorSensors:
         self.gyro_calibration = GyroCalibration(calibration_path)
         self.accel_mag_calibration = AccelMagCalibration(
             calibration_path.with_name('accel_mag_calibration.json'))
+
+    def close(self):
+        navigator.close()
+        if self.filtre is not None:
+            self.filtre.close()
+            self.filtre = None
 
     def read_battery_voltage(self):
         """POWER pin 4 -> ADC3; the Blue Robotics PSM divides voltage by 11."""
@@ -174,9 +164,13 @@ class NavigatorSensors:
         if self.filtre is None:
             self.reset_filtre()
 
-        accel = read_navigator(navigator.read_accel)
-        gyro = read_navigator(navigator.read_gyro)
-        mag = read_navigator(navigator.read_mag)
+        try:
+            accel = read_navigator(navigator.read_accel)
+            gyro = read_navigator(navigator.read_gyro)
+            mag = read_navigator(navigator.read_mag)
+        except OSError:
+            self.reset_filtre()
+            raise
 
         instant_ns = time.monotonic_ns()
 
@@ -196,6 +190,8 @@ class NavigatorSensors:
             "roll_deg":     None,
             "pitch_deg":    None,
             "yaw_deg":      None,
+            "quaternion_wxyz": None,
+            "inclinaison_verticale_deg": None,
 
             "attitude_ok":  False,
             "filter_mode":  "INITIALIZING",
@@ -256,6 +252,11 @@ class NavigatorSensors:
 
         self.filtre.update()
         resultat = self.filtre.solution()
+
+        q = self.filtre.attitude_quaternion()
+        if q is not None and all(math.isfinite(v) for v in q) and any(q):
+            donnees["quaternion_wxyz"] = q
+            donnees["inclinaison_verticale_deg"] = inclinaison_verticale(q)
 
         donnees["filter_mode"] = resultat.mode
 
